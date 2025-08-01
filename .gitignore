@@ -7,5 +7,8 @@ config.json
 # Operating System specific files
 .DS_Store
 
-#Keys and passwords
+# Keys and passwords
 .env
+
+# Other
+cheatsheet.txt
