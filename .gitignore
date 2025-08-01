@@ -1,0 +1,11 @@
+# Python-specific
+__pycache__/
+
+# Local settings
+config.json
+
+# Operating System specific files
+.DS_Store
+
+#Keys and passwords
+.env
