@@ -16,7 +16,7 @@ class CodePopup(customtkinter.CTkToplevel):
 
         self.copy_button = customtkinter.CTkButton(
             self,
-            text="Copy to Clipboard",
+            text="Copy Code",
             command=lambda: self.copy_code(code_text)
         )
         self.copy_button.pack(pady=10)
@@ -31,7 +31,7 @@ def insert_code_block_button(chat_textbox: customtkinter.CTkTextbox, parent, cod
     tag_name = f"codeblock_{id(code_text)}"
 
     chat_textbox.configure(state="normal")
-    chat_textbox.insert("end", "[ View Code ]\n\n", tag_name)
+    chat_textbox.insert("end", "[ Code Block ]", tag_name)
     chat_textbox.tag_config(
         tag_name,
         foreground="#ffffff",

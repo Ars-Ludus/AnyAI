@@ -1,7 +1,4 @@
 import customtkinter
-import httpx
-import asyncio
-
 class MemoryPopup(customtkinter.CTkToplevel):
     def __init__(self, parent, memory_string: str):
         super().__init__(parent)
@@ -26,15 +23,15 @@ class MemoryPopup(customtkinter.CTkToplevel):
         self.clipboard_append(text)
         self.copy_button.configure(text="Copied!")
 
-async def insert_memory_button(chat_textbox: customtkinter.CTkTextbox, parent, api_url: str):
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.get(api_url)
-            memory_context = resp.json().get("memory", "[STM Empty]")
-        except Exception:
-            memory_context = "[STM Unavailable]"
+def insert_memory_button(chat_textbox: customtkinter.CTkTextbox, parent, memory_context_string: str):
+    """
+    Inserts a 'View Memory' button into the chat textbox.
+    The button, when clicked, opens a popup displaying the provided memory_context_string.
+    """
+    if not memory_context_string.strip():
+        memory_context_string = "[Memory Empty]"
 
-    tag_name = f"viewmemory_{id(memory_context)}"
+    tag_name = f"viewmemory_{id(memory_context_string)}"
 
     chat_textbox.configure(state="normal")
     chat_textbox.insert("end", "[ View Memory ]\n\n", tag_name)
@@ -46,7 +43,7 @@ async def insert_memory_button(chat_textbox: customtkinter.CTkTextbox, parent, a
     )
 
     def on_click(event):
-        MemoryPopup(parent, memory_context)
+        MemoryPopup(parent, memory_context_string)
 
     chat_textbox.tag_bind(tag_name, "<Button-1>", on_click)
     chat_textbox.configure(state="disabled")

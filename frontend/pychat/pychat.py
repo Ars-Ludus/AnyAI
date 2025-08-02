@@ -5,12 +5,11 @@ import asyncio
 from PIL import Image
 import json
 import os
-from memory.stm_eth import STM
-from config.manager import ConfigManager
+import re
+# Removed old imports for STM and ConfigManager
 from .ui.code_block import insert_code_block_button
 from .ui.view_memory import insert_memory_button
-from memory.global_memory import stm
-
+from .ui.settings_window import SettingsWindow
 
 # --- UI Setup ---
 customtkinter.set_appearance_mode("Dark")
@@ -23,6 +22,7 @@ class App(customtkinter.CTk):
         self.title("AryAI Chat Client")
         self.geometry("600x600")
         self.chat_font = customtkinter.CTkFont(family="Segoe UI", size=15)
+        self.backend_url = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000")
 
         self.ai_pastel_color = "#F8B195"
         self.user_pastel_color = "#B7E9C7"
@@ -100,7 +100,6 @@ class App(customtkinter.CTk):
         self.insert_message("Welcome to AryAI. How can I help you today?", sender="ai")
     
         #code block button
-        insert_code_block_button(self.chat_textbox, self, "def hello():\n    print('Hello, world!')")
 
         #status light heartbeat
         self.after(1000, self.check_connection_loop)
@@ -162,59 +161,143 @@ class App(customtkinter.CTk):
             print(f"Failed to update colors: {e}")
             
     def open_settings(self):
-        self.settings_window = SettingsWindow(self)
+        # Fetch data synchronously before opening the window
+        try:
+            modules_response = httpx.get(f"{self.backend_url}/config/memory/modules", timeout=5.0)
+            modules_response.raise_for_status()
+            modules = modules_response.json().get("modules", [])
 
+            current_module_response = httpx.get(f"{self.backend_url}/config/memory/current", timeout=5.0)
+            current_module_response.raise_for_status()
+            current_module = current_module_response.json().get("current_module")
+
+            self.settings_window = SettingsWindow(self, modules=modules, current_module=current_module)
+        except Exception as e:
+            print(f"Failed to open settings: {e}")
+            # Optionally, show an error message to the user
+            # For simplicity, we'll just print to console here.
+
+    # NEW: Async method to clear memory on the backend
+    async def _clear_memory_on_backend(self):
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(f"{self.backend_url}/memory/clear")
+                response.raise_for_status()
+                return True
+        except Exception as e:
+            print(f"Failed to clear memory on backend: {e}")
+            return False
+
+    # UPDATED: Synchronous method to clear UI and call backend
     def clear_chat_history(self):
-        self.chat_textbox.configure(state="normal")
-        self.chat_textbox.delete("1.0", "end")
-        self.insert_message("Welcome to AryAI. How can I help you today?", sender="ai")
-        self.chat_textbox.configure(state="disabled")
+        async def clear_and_reset():
+            if await self._clear_memory_on_backend():
+                self.chat_textbox.configure(state="normal")
+                self.chat_textbox.delete("1.0", "end")
+                self.insert_message("Welcome to AryAI. How can I help you today?", sender="ai")
+                self.chat_textbox.configure(state="disabled")
+
+        # Run the async function from the synchronous button command
+        threading.Thread(target=asyncio.run, args=(clear_and_reset(),)).start()
 
     def insert_message(self, message, sender):
         self.chat_textbox.configure(state="normal")
         self.chat_textbox.insert("end", f"\n{message}\n", sender)
         self.chat_textbox.see("end")
         self.chat_textbox.configure(state="disabled")
+    
+    # Async method to fetch memory history from the backend
+    async def get_memory_history_from_backend(self, session_id: str = "pychat_session"):
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(f"{self.backend_url}/memory/history", params={"session_id": session_id})
+                response.raise_for_status()
+                return response.json().get("history", [])
+        except Exception as e:
+            print(f"Failed to fetch memory history from backend: {e}")
+            return []
 
+    # NEW: Async method to fetch the formatted memory context string from the backend
+    async def get_memory_context_string_from_backend(self, session_id: str = "pychat_session"):
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(f"{self.backend_url}/memory/context_string", params={"session_id": session_id})
+                response.raise_for_status()
+                return response.json().get("context_string", "")
+        except Exception as e:
+            print(f"Failed to fetch memory context string from backend: {e}")
+            return ""
+
+    # UPDATED: The core method to send and stream the response
     async def _send_and_stream(self, prompt: str):
-        api_url = "http://127.0.0.1:8000/stream"
-        payload = {"prompt": prompt}
-        memory_context = stm.get_context()
-        if memory_context:
-            await insert_memory_button(self.chat_textbox, self, "http://127.0.0.1:8000/memory")
+        # NEW: Fetch conversation history from the backend for the specific session
+        session_id = "pychat_session" # Ensure consistency
+        
+        # Fetch conversation history from the backend for the specific session
+        memory_history = await self.get_memory_history_from_backend(session_id=session_id)
+        
+        # Fetch the formatted context string from the backend
+        memory_context_string = await self.get_memory_context_string_from_backend(session_id=session_id)
 
-        if not memory_context:
-            memory_context = "[STM Empty]"
-            await insert_memory_button(self.chat_textbox, self, "http://127.0.0.1:8000/memory")
+        # NEW: The payload now includes the conversation history and a session ID
+        payload = {
+            "query": prompt,
+            "messages": memory_history, # Still send history for LLM context
+            "session_id": session_id,
+            "temperature": 0.7,
+            "max_tokens": 4096
+        }
+
+        # Update the memory button with the formatted context string
+        insert_memory_button(self.chat_textbox, self, memory_context_string)
 
         response_text = ""
-
         self.insert_message("AI: ...", "ai")
 
         try:
             async with httpx.AsyncClient() as client:
                 async with client.stream(
-                    "POST", 
-                    api_url, 
+                    "POST",
+                    f"{self.backend_url}/stream",
                     json=payload,
                     timeout=None
                 ) as response:
                     response.raise_for_status()
                     self.chat_textbox.configure(state="normal")
                     self.chat_textbox.delete("end-2l", "end-1l")
-                    self.chat_textbox.configure(state="disabled")
 
-                    self.insert_message("AI: ", "ai")
-                    
-                    self.chat_textbox.configure(state="normal")
+                    # Manually insert AI prefix to avoid extra newlines from insert_message
+                    self.chat_textbox.insert("end-1l", "AI: ", "ai")
+                    response_start_index = self.chat_textbox.index("end-1c")
+
+                    # Stream response for live updates
                     async for chunk in response.aiter_bytes():
                         decoded_chunk = chunk.decode()
                         self.chat_textbox.insert("end", decoded_chunk, "ai")
                         response_text += decoded_chunk
                         self.chat_textbox.see("end")
                         self.update()
-                    self.chat_textbox.configure(state="disabled")
+
+                    # Re-process the response for code blocks
+                    self.chat_textbox.delete(response_start_index, "end")
+                    
+                    parts = re.split(r'(```[\s\S]*?```)', response_text)
+                    for part in parts:
+                        if not part:
+                            continue
+                        if part.startswith('```') and part.endswith('```'):
+                            code = part[3:-3].strip()
+                            if code:
+                                insert_code_block_button(self.chat_textbox, self, code)
+                        else:
+                            self.chat_textbox.insert("end", part, "ai")
+                    
+                    self.chat_textbox.see("end")
+                    
+                    # Add a final newline for spacing and disable editing
                     self.insert_message("", "ai")
+                    self.chat_textbox.configure(state="disabled")
+
 
         except httpx.HTTPStatusError as e:
             self.insert_message(f"\nError: Server returned status code {e.response.status_code}\n{e.response.text}", "ai")
@@ -246,7 +329,7 @@ class App(customtkinter.CTk):
         async def ping():
             try:
                 async with httpx.AsyncClient() as client:
-                    resp = await client.get("http://127.0.0.1:8000/ping", timeout=2)
+                    resp = await client.get(f"{self.backend_url}/ping", timeout=2)
                     if resp.status_code == 200:
                         self.status_light.configure(text_color="#00d26a")  # green
                     else:
@@ -260,79 +343,6 @@ class App(customtkinter.CTk):
             loop.create_task(ping())
 
         self.after(3000, self.check_connection_loop)
-
-class SettingsWindow(customtkinter.CTkToplevel):
-    def __init__(self, master, *args, **kwargs):
-        super().__init__(master, *args, **kwargs)
-        self.main_app = master
-        self.title("Settings")
-        self.geometry("400x300")
-        self.grab_set()
-
-        self.settings_frame = customtkinter.CTkFrame(self)
-        self.settings_frame.pack(padx=8, pady=8, fill="both", expand=True)
-
-        self.title_label = customtkinter.CTkLabel(
-            self.settings_frame,
-            text="Application Settings",
-            font=customtkinter.CTkFont(size=20, weight="bold")
-        )
-        self.title_label.pack(pady=(0, 10))
-
-        self.user_color_label = customtkinter.CTkLabel(
-            self.settings_frame,
-            text="User Bubble Color (Hex Code):"
-        )
-        self.user_color_label.pack(anchor="w", padx=4, pady=(4, 0))
-
-        self.user_color_entry = customtkinter.CTkEntry(
-            self.settings_frame,
-            placeholder_text="#B7E9C7"
-        )
-        self.user_color_entry.insert(0, self.main_app.user_pastel_color)
-        self.user_color_entry.pack(fill="x", padx=4, pady=(0, 4))
-
-        self.ai_color_label = customtkinter.CTkLabel(
-            self.settings_frame,
-            text="AI Bubble Color (Hex Code):"
-        )
-        self.ai_color_label.pack(anchor="w", padx=4, pady=(4, 0))
-
-        self.ai_color_entry = customtkinter.CTkEntry(
-            self.settings_frame,
-            placeholder_text="#F8B195"
-        )
-        self.ai_color_entry.insert(0, self.main_app.ai_pastel_color)
-        self.ai_color_entry.pack(fill="x", padx=4, pady=(0, 20))
-        
-        self.hover_color_label = customtkinter.CTkLabel(
-            self.settings_frame,
-            text="Hover Color (Hex Code):"
-        )
-        self.hover_color_label.pack(anchor="w", padx=4, pady=(4, 0))
-
-        self.hover_color_entry = customtkinter.CTkEntry(
-            self.settings_frame,
-            placeholder_text="#D6CDEA"
-        )
-        self.hover_color_entry.insert(0, self.main_app.hover_pastel_color)
-        self.hover_color_entry.pack(fill="x", padx=4, pady=(0, 20))
-
-        self.save_button = customtkinter.CTkButton(
-            self.settings_frame,
-            text="Save Settings",
-            command=self.save_settings
-        )
-        self.save_button.pack(pady=4)
-
-    def save_settings(self):
-        user_color = self.user_color_entry.get()
-        ai_color = self.ai_color_entry.get()
-        hover_color = self.hover_color_entry.get()
-
-        self.main_app.update_app_settings(user_color, ai_color, hover_color)
-
-        self.destroy()
 
 if __name__ == "__main__":
     app = App()
