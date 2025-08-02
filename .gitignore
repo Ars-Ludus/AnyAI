@@ -12,3 +12,5 @@ config.json
 
 # Other
 cheatsheet.txt
+.tmp.drivedownload
+.tmp.driveupload

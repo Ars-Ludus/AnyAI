@@ -5,6 +5,12 @@ import asyncio
 from PIL import Image
 import json
 import os
+from memory.stm_eth import STM
+from config.manager import ConfigManager
+from .ui.code_block import insert_code_block_button
+from .ui.view_memory import insert_memory_button
+from memory.global_memory import stm
+
 
 # --- UI Setup ---
 customtkinter.set_appearance_mode("Dark")
@@ -38,6 +44,15 @@ class App(customtkinter.CTk):
 
         self.toolbar_frame = customtkinter.CTkFrame(self, fg_color="transparent", width=50)
         self.toolbar_frame.pack(side="left", fill="y", padx=4, pady=4)
+
+        #status light thingy
+        self.status_light = customtkinter.CTkLabel(
+            self.toolbar_frame,
+            text="●",
+            text_color="gray",
+            font=customtkinter.CTkFont(size=16, weight="bold")
+        )
+        self.status_light.pack(side="top", pady=(10, 10))
 
         self.clear_button = customtkinter.CTkButton(
             self.toolbar_frame,
@@ -83,6 +98,12 @@ class App(customtkinter.CTk):
         self.input_textbox.bind("<Shift-Return>", self.insert_newline)
 
         self.insert_message("Welcome to AryAI. How can I help you today?", sender="ai")
+    
+        #code block button
+        insert_code_block_button(self.chat_textbox, self, "def hello():\n    print('Hello, world!')")
+
+        #status light heartbeat
+        self.after(1000, self.check_connection_loop)
 
     def configure_chat_tags(self):
         self.chat_textbox.tag_config("user",
@@ -158,6 +179,14 @@ class App(customtkinter.CTk):
     async def _send_and_stream(self, prompt: str):
         api_url = "http://127.0.0.1:8000/stream"
         payload = {"prompt": prompt}
+        memory_context = stm.get_context()
+        if memory_context:
+            await insert_memory_button(self.chat_textbox, self, "http://127.0.0.1:8000/memory")
+
+        if not memory_context:
+            memory_context = "[STM Empty]"
+            await insert_memory_button(self.chat_textbox, self, "http://127.0.0.1:8000/memory")
+
         response_text = ""
 
         self.insert_message("AI: ...", "ai")
@@ -211,6 +240,26 @@ class App(customtkinter.CTk):
     def insert_newline(self, event=None):
         self.input_textbox.insert("insert", "\n")
         return "break"
+
+    #status light heartbeat
+    def check_connection_loop(self):
+        async def ping():
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get("http://127.0.0.1:8000/ping", timeout=2)
+                    if resp.status_code == 200:
+                        self.status_light.configure(text_color="#00d26a")  # green
+                    else:
+                        self.status_light.configure(text_color="#ffc700")  # yellow
+            except:
+                self.status_light.configure(text_color="#d0003f")  # red
+        try:
+            asyncio.run(ping())
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+            loop.create_task(ping())
+
+        self.after(3000, self.check_connection_loop)
 
 class SettingsWindow(customtkinter.CTkToplevel):
     def __init__(self, master, *args, **kwargs):

@@ -1,17 +1,33 @@
 # main.py
 import os
 import asyncio
+import logging
+from starlette.responses import StreamingResponse
+from typing import AsyncGenerator
+from config.manager import ConfigManager
+from memory.stm_eth import STM
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from llms import gemini
+from memory.global_memory import stm
+
 from base import LLMAdapter
 from typing import Dict, AsyncGenerator
 
 # Load environment variables from .env file
 load_dotenv()
+config = ConfigManager()
 
+class PingFilter(logging.Filter):
+    def filter(self, record):
+        return "/ping" not in record.getMessage()
+
+logging.getLogger("uvicorn.access").addFilter(PingFilter())
 app = FastAPI(title="AryAI LLM Backend", description="Modular LLM Gateway for Reasoning Agents")
+
+# Config instance
+config = ConfigManager()
 
 # Get API key from environment
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -23,8 +39,8 @@ if not GEMINI_API_KEY:
 model_registry: Dict[str, LLMAdapter] = {
     "gemini": gemini.GeminiAdapter(api_key=GEMINI_API_KEY),
 }
-current_model = model_registry["gemini"]  # Default to gemini
-
+default_model_id = config.get("model.core.active") or "gemini"
+current_model = model_registry.get(default_model_id, model_registry["gemini"])
 # ---------------------------
 # LLM Query Endpoint (Non-streaming)
 # ---------------------------
@@ -32,15 +48,19 @@ current_model = model_registry["gemini"]  # Default to gemini
 async def query(request: Request):
     data = await request.json()
     prompt = data.get("prompt", "")
-    context = data.get("context", "")
+    context = stm.get_context()
     params = data.get("params", {})
-    
+
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt is required.")
 
     try:
-        response = await current_model.generate(prompt, context, **params)
-        return {"model": current_model.id, "response": response}
+        response_text = await current_model.generate(prompt, context, **params)
+        stm.add("user", prompt)
+        stm.add("assistant", response_text)
+        print("STM Context:\n", stm.get_context())
+
+        return {"model": current_model.id, "response": response_text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM generation failed: {str(e)}")
 
@@ -55,13 +75,25 @@ async def generate_response_stream(prompt: str, context: str, params: Dict) -> A
 async def stream(request: Request):
     data = await request.json()
     prompt = data.get("prompt", "")
-    context = data.get("context", "")
+    context = stm.get_context()  # ✅ Use STM here
     params = data.get("params", {})
 
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt is required.")
 
-    return StreamingResponse(generate_response_stream(prompt, context, params), media_type="text/plain")
+    async def stream_and_store() -> AsyncGenerator[str, None]:
+        full_response = ""
+
+        async for chunk in current_model.generate_stream(prompt, context, **params):
+            full_response += chunk
+            yield chunk
+
+        # ✅ After streaming ends, update STM
+        stm.add("user", prompt)
+        stm.add("assistant", full_response)
+        print("STM Context:\n", stm.get_context())
+
+    return StreamingResponse(stream_and_store(), media_type="text/plain")
 
 # ---------------------------
 # Embedding Endpoint
@@ -128,3 +160,11 @@ async def select_model(request: Request):
     
     current_model = model_registry[model_id]
     return {"message": f"Switched to model: {current_model.name}"}
+
+@app.get("/ping")
+def ping():
+    return {"status": "ok"}
+
+@app.get("/memory")
+def get_memory():
+    return {"memory": stm.get_context()}
