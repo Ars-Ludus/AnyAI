@@ -4,6 +4,9 @@ import os
 import importlib
 import json
 from dotenv import load_dotenv
+from typing import List, Dict
+import logging
+# from memory.memory_manager import MemoryManager # Removed to break circular import
 
 class ConfigManager:
     _instance = None
@@ -12,8 +15,6 @@ class ConfigManager:
         if cls._instance is None:
             cls._instance = super(ConfigManager, cls).__new__(cls)
             cls._instance._load_config()
-            cls._instance._discover_module_configs('memory')
-            cls._instance._discover_module_configs('llms')
         return cls._instance
 
     def _load_config(self):
@@ -23,14 +24,12 @@ class ConfigManager:
         self.config = {
             "llm": {
                 "active_model": "gemini",
-                "modules": {},
                 "api_keys": {
                     "gemini": os.getenv("GEMINI_API_KEY")
                 }
             },
             "memory": {
-                "active_module": "stm_eth",
-                "modules": {}
+                "active_module": "stm_eth"
             }
         }
         
@@ -38,28 +37,6 @@ class ConfigManager:
             with open('config.json', 'r') as f:
                 file_config = json.load(f)
                 self._recursive_update(self.config, file_config)
-
-    def _discover_module_configs(self, module_category):
-        """
-        Dynamically discovers and loads configuration options from modules in a given category.
-        """
-        module_path = os.path.join(os.path.dirname(__file__), '..', module_category)
-        
-        config_key = "llm" if module_category == "llms" else module_category
-
-        for filename in os.listdir(module_path):
-            if filename.endswith('.py') and filename != '__init__.py' and filename != 'base.py':
-                module_name = filename[:-3]
-                try:
-                    module = importlib.import_module(f"{module_category}.{module_name}")
-                    if hasattr(module, 'module_config'):
-                        module_config = getattr(module, 'module_config')
-                        self.config[config_key]['modules'][module_name] = module_config
-                        print(f"Discovered configuration for {config_key} module: {module_name}")
-                except ImportError as e:
-                    print(f"Warning: Could not import {config_key} module {module_name}: {e}")
-                except FileNotFoundError as e:
-                    print(f"Warning: Module directory not found for {config_key}: {e}")
 
     def _recursive_update(self, d, u):
         for k, v in u.items():
@@ -97,13 +74,8 @@ class ConfigManager:
         self.config['memory']['active_module'] = module_name
         self._save_config()
         
-    def get_memory_config(self, module_name: str = None):
-        if module_name and module_name in self.config['memory']['modules']:
-            return self.config['memory']['modules'][module_name]
-        return self.config['memory']['modules']
-        
     def get_api_key(self, llm_name: str) -> str:
         return self.config['llm']['api_keys'].get(llm_name)
 
-
-config_manager = ConfigManager()
+# Global instance will be created and memory_manager set in main.py
+# config_manager = ConfigManager() # Removed global instance creation here

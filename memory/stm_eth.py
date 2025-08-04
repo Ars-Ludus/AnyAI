@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta
 from typing import List, Dict
+from memory.base import BaseMemory
 
 class stm_eth_entry:
     def __init__(self, role, content, timestamp=None):
@@ -9,7 +10,10 @@ class stm_eth_entry:
         self.content = content
         self.timestamp = timestamp or datetime.now()
 
-class stm_eth:
+class stm_eth(BaseMemory):
+    id = "stm_eth"
+    name = "Ephemeral Memory"
+
     def __init__(self, max_turns=15, max_age_minutes=15):
         self.sessions = {} # Dictionary to hold memory for different sessions
         self.max_turns = max_turns

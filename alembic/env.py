@@ -25,8 +25,14 @@ if config.config_file_name is not None:
 # add your model's MetaData object here
 # for 'autogenerate' support
 sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(__file__), '..')))
-from memory.stm_prp import Base
-target_metadata = Base.metadata
+from memory.stm_prp import Base as StmBase
+from memory.utm_anyai import Base as UtmBase
+
+# Combine metadata from all models
+target_metadata = [
+    StmBase.metadata,
+    UtmBase.metadata
+]
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

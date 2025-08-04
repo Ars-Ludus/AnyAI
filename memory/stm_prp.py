@@ -7,6 +7,7 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 from dotenv import load_dotenv
+from memory.base import BaseMemory
 
 load_dotenv()
 
@@ -23,7 +24,10 @@ class Message(Base):
     content = Column(Text, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
-class stm_prp:
+class stm_prp(BaseMemory):
+    id = "stm_prp"
+    name = "Perpetual Memory"
+
     def __init__(self):
         db_url = os.getenv("MEMORY_SQL")
         if not db_url:
@@ -31,7 +35,8 @@ class stm_prp:
             raise ValueError("MEMORY_SQL environment variable not set")
         self.engine = create_engine(db_url)
         self.Session = sessionmaker(bind=self.engine)
-        logging.info(f"stm_prp initialized with DB URL: {db_url}")
+        Base.metadata.create_all(bind=self.engine)  # Create tables if they don't exist
+        logging.info(f"stm_prp initialized with DB URL: {db_url}, tables created")
 
     def add_message(self, role: str, content: str, session_id: str = "default"):
         session = self.Session()

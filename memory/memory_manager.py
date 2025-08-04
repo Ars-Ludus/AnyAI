@@ -1,58 +1,82 @@
 # memory/memory_manager.py
 
-from typing import List, Dict
+import os
 import importlib
-from memory.stm_eth import stm_eth
-# Removed: from config.manager import config_manager # Avoid circular import
+import inspect
+from typing import List, Dict
+from memory.base import BaseMemory
+from config.manager import ConfigManager
+import logging
 
 class MemoryManager:
-    def __init__(self, config_manager_instance):
-        self.config_manager = config_manager_instance
-        self.memory_module_instance = self._load_active_memory_module()
+    def __init__(self, config_manager: ConfigManager):
+        self.config_manager = config_manager
+        self.modules = {}
+        self._instances = {}  # Cache for module instances
+        self.active_module_name = None
+        self.active_module = None
+        self._discover_modules()
+        self.set_active_module(self.config_manager.get_memory_module())
 
-    def _load_active_memory_module(self):
-        module_name = self.config_manager.get_memory_module()
-        class_name = f"{module_name}"
-        
-        try:
-            module = importlib.import_module(f"memory.{module_name}")
-            memory_class = getattr(module, class_name)
-            # Pass session_id to the memory module's constructor if it supports it
-            # For now, assuming it's handled by methods, not constructor
-            return memory_class()
-        except (ImportError, AttributeError) as e:
-            raise ImportError(f"Could not load memory module '{module_name}': {e}")
+    def _discover_modules(self):
+        """
+        Dynamically discovers and registers memory modules from the 'memory' directory
+        by finding classes that inherit from BaseMemory.
+        """
+        module_path = os.path.dirname(__file__)
+        for filename in os.listdir(module_path):
+            if filename.endswith('.py') and filename not in ['__init__.py', 'base.py', 'memory_manager.py']:
+                module_name_str = filename[:-3]
+                try:
+                    module = importlib.import_module(f"memory.{module_name_str}")
+                    for name, obj in inspect.getmembers(module, inspect.isclass):
+                        if issubclass(obj, BaseMemory) and obj is not BaseMemory:
+                            # Use the class's `id` attribute for the module name
+                            if hasattr(obj, 'id'):
+                                module_id = obj.id
+                                self.modules[module_id] = {
+                                    "class": obj,
+                                    "config": getattr(module, "module_config", {})
+                                }
+                                print(f"Discovered memory module: {module_id}")
+                            else:
+                                print(f"Warning: Memory module class {name} in {filename} does not have an 'id' attribute.")
+                except (ImportError, AttributeError, SyntaxError) as e:
+                    print(f"Warning: Could not load memory module from {filename}: {e}")
 
-    def reload_memory_module(self):
+    def set_active_module(self, module_name: str):
         """
-        Reloads the memory module based on the current configuration.
-        This is called when the configuration is changed via an API endpoint.
+        Sets the active memory module, using a cached instance if available.
         """
-        self.memory_module_instance = self._load_active_memory_module()
+        if module_name in self.modules:
+            if module_name not in self._instances:
+                module_info = self.modules[module_name]
+                self._instances[module_name] = module_info["class"]()
+                print(f"Initialized and cached new instance for memory module: {module_name}")
+
+            self.active_module_name = module_name
+            self.active_module = self._instances[module_name]
+            self.config_manager.set_memory_module(module_name)
+            print(f"Active memory module set to: {module_name}")
+        else:
+            raise ValueError(f"Memory module '{module_name}' not found.")
+
+    def get_active_module(self) -> BaseMemory:
+        if not self.active_module:
+            raise ValueError("No active memory module set.")
+        return self.active_module
 
     def add_message(self, role: str, content: str, session_id: str = "default"):
-        """
-        Adds a new message to the active memory module.
-        """
-        self.memory_module_instance.add_message(role, content, session_id=session_id)
+        logging.info(f"MemoryManager adding message to session '{session_id}'")
+        self.get_active_module().add_message(role, content, session_id)
 
     def get_messages(self, session_id: str = "default") -> List[Dict]:
-        """
-        Retrieves all messages from the active memory module.
-        """
-        return self.memory_module_instance.get_messages(session_id=session_id)
+        return self.get_active_module().get_messages(session_id)
 
     def clear(self, session_id: str = "default"):
-        """
-        Clears the active memory module.
-        """
-        self.memory_module_instance.clear(session_id=session_id)
+        self.get_active_module().clear(session_id)
 
     def get_context_string(self, session_id: str = "default") -> str:
-        """
-        Retrieves the conversation history as a single string.
-        """
-        return self.memory_module_instance.get_context_string(session_id=session_id)
+        return self.get_active_module().get_context_string(session_id)
 
-# The global instance will now be created in main.py after config_manager is available
-# Removed: memory_manager = MemoryManager()
+# Global instance will be created in main.py
